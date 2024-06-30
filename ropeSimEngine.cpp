@@ -349,47 +349,91 @@ public:
 
 // ========== END class SPRING ==========
 
+// ========== class JakobsenMethod ==========
+
+class Jakobsen
+{
+public:
+    Mass* mass1;
+    Mass* mass2;
+    float springLength;
+
+    Jakobsen(Mass* mass1, Mass* mass2, float springLength)
+    {
+        this->mass1 = mass1;
+        this->mass2 = mass2;
+        this->springLength = springLength;
+    }
+
+    void solve(int numIt)
+    {
+        vector3d springVector;
+        float r;
+        vector3d diff;
+
+        for (int k = 0; k < numIt; k++)
+        {
+            springVector = mass1->pos - mass2->pos;
+            r = springVector.magnitude();
+            if (r != 0) {
+                diff = -(springVector / r) * (r - springLength);
+            }
+            mass1->pos += diff * 0.5;
+            mass2->pos -= diff * 0.5;
+        }
+    }
+};
+
+// ========== END class JakobsenMethod ==========
+
 // ========== CLASS RopeSimulation  ==========
 
 class RopeSimulation : public Simulation
 {
 public:
     Spring** springs; // Springs connect numOfMasses of masses.
+    Jakobsen** jakobsen; // Jakobsen - Enforcing Constraints
     vector3d gravitation; // Gravitational acceleration (Applied to all masses)
     vector3d ropeConnectionPos; // First point of Rope (with index 0) that used to set the position
     vector3d ropeConnectionVel; // Velocity of moving of ropeConnectionPos. It is possible to swing the Rope
+    float springLength;         // Length of relaxed spring
     float groundRepulsionConstant; // Repultion constant of ground. How much the ground is repulsing the Rope.
     float groundFrictionConstant; // Friction constant of the ground for sliding the Rope on the ground.    
     float groundAbsorptionConstant; // Absorption constant of the ground. Used for the vertical collisions of the Rope with the ground.
     float groundHeight; // Y coordinate of the ground.
     float airFrictionConstant; // Friction constant of the air. 
+    float massRepulsionConstant; // Interaction between masses
 
-    // Constructor with 11 parameters:
-    RopeSimulation(                  // Constructor
+    // Constructor with 13 parameters:
+    RopeSimulation(                  
         int numOfMasses,               // 1. Number of masses
-        float m,                       // 2. Weight of each mass
-        float springConstant,          // 3. How tight is the spring
-        float springLength,            // 4. Length of relaxed spring
-        float springFrictionConstant,  // 5. Internal friction
-        vector3d gravitation,          // 6. Gravtation acceleration
-        float airFrictionConstant,     // 7. Air friction
-        float groundRepulsionConstant, // 8. Ground repulsion
-        float groundFrictionConstant,  // 9. Ground friction
-        float groundAbsorptionConstant,// 10. Ground absorption
-        float groundHeight             // 11. Height of the ground
+        int numIt,                     // 2.Number of iteration for Jakobsen method
+        float m,                       // 3. Weight of each mass
+        float springConstant,          // 4. How tight is the spring
+        float springLength,            // 5. Length of relaxed spring
+        float springFrictionConstant,  // 6. Internal friction
+        vector3d gravitation,          // 7. Gravtation acceleration
+        float airFrictionConstant,     // 8. Air friction
+        float groundRepulsionConstant, // 9. Ground repulsion
+        float groundFrictionConstant,  // 10. Ground friction
+        float groundAbsorptionConstant,// 11. Ground absorption
+        float massRepulsionConstant,   // 12. Interaction between masses
+        float groundHeight             // 13. Height of the ground
     ) : Simulation(numOfMasses, m) // The class that create masses with weight m. 
     {
+        this->springLength = springLength;
         this->gravitation = gravitation;
         this->airFrictionConstant = airFrictionConstant;
         this->groundFrictionConstant = groundFrictionConstant;
         this->groundRepulsionConstant = groundRepulsionConstant;
         this->groundAbsorptionConstant = groundAbsorptionConstant;
+        this->massRepulsionConstant = massRepulsionConstant;
         this->groundHeight = groundHeight;
 
         for (int i = 0; i < numOfMasses; i++)
         {// INITIAL POSITION:
-            masses[i]->pos.x = i * springLength; // *sin(PI / 4);
-            masses[i]->pos.y = 0.0; // -i * springLength; // *sin(PI / 4);
+            masses[i]->pos.x = 0.0;  // i* springLength; // *sin(PI / 4);
+            masses[i]->pos.y = -i * springLength; // *sin(PI / 4);
             masses[i]->pos.z = 0;
 
             masses[i]->oldpos = masses[i]->pos;
@@ -401,6 +445,13 @@ public:
         {
             springs[i] = new Spring(masses[i], masses[i + 1],
                 springConstant, springLength, springFrictionConstant);
+        }
+
+        jakobsen = new Jakobsen * [numOfMasses - 1];
+
+        for (int i = 0; i < numOfMasses - 1; i++)
+        {
+            jakobsen[i] = new Jakobsen(masses[i], masses[i + 1], springLength);
         }
     }
 
@@ -442,6 +493,26 @@ public:
                 }
             }
         }
+
+        // Interaction between masses
+        for (int k = numOfMasses - 1; k >= 2; k--)
+        {
+            for (int m = 0; m < k - 1; m++)
+            {
+                vector3d springVector = masses[m]->pos - masses[k]->pos;                
+                float r = springVector.magnitude();                
+                vector3d force;                
+
+                if (r < 1.2 * springLength)
+                {                    
+                    {
+                        force = (springVector / r) * massRepulsionConstant / (0.001 + r);
+                    }
+                    masses[m]->applyForce(force);
+                    masses[k]->applyForce(-force);                    
+                }
+            }
+        }
     }
 
     // Rope first point movement simulation
@@ -466,14 +537,25 @@ public:
     {
         this->ropeConnectionVel = ropeConnectionVel;
     }
+
+    // Jakobsen - Enforcing Constraints
+    void relaxation(int numIt)
+    {
+        for (int i = 0; i < numOfMasses - 1; i++)
+        {
+            jakobsen[i]->solve(numIt);
+        }
+    }
 };
 
 // ========== END CLASS RopeSimulation  ==========
 
 int main()
 {   
+    float V = 0;            // The velocity to simulate initial movement
     int frame = 0;          // Temporary value of the frame to show position
-    int numOfMasses = 21;   // Number of masses
+    int numOfMasses = 31;   // Number of masses
+    int numIt = 10;         // Number of iteration for Jakobsen method
     float dt = 0.001f;      // Time interval
     float g = 9.81f;        // Gravitational acceleration
     float mass = 0.05f;     // Mass of each particle
@@ -482,16 +564,18 @@ int main()
     float springConstant = (numOfMasses - 1) * mass * g / delta; // Spring Constant
     float springFrictionConstant = 2.0;     // Constant of internal friction
     float airFrictionConstant = 0.02;       // Air friction
-    float groundRepulsionConstant = 100.0f; // Ground repulsion
-    float groundFrictionConstant = 0.2f;    // Ground friction
+    float groundRepulsionConstant = 10.0f; // 100.0 - Ground repulsion
+    float groundFrictionConstant = 1.0f;    // 0.2 - Ground friction
     float groundAbsorptionConstant = 2.0f;  // Ground absorption
-    float groundHeight = -1.5f;             // Height of the ground
+    float massRepulsionConstant = 0.2f;     // Interaction between masses
+    float groundHeight = -1.65f;             // Height of the ground
 
     vector3d ropeConnectionVel = vector3d(0, 0, 0);  // Rope first point velocity
 
     RopeSimulation* ropeSimulation =
         new RopeSimulation(
             numOfMasses,                // Number of masses
+            numIt,                      // Number of iteration for Jakobsen method
             mass,                       // Mass of each particle
             springConstant,             // Spring Constant
             length,                     // Length of relaxed spring
@@ -501,30 +585,40 @@ int main()
             groundRepulsionConstant,    // Constant of ground repulsion
             groundFrictionConstant,     // Constant of ground friction
             groundAbsorptionConstant,   // Constant of ground absorption
+            massRepulsionConstant,      // Interaction between masses
             groundHeight);              // Height of ground
 
     ropeSimulation->setRopeConnectionVel(ropeConnectionVel);
-    for (int i = 0; i < 1000; i++)
+    for (int i = 0; i < 3000; i++)
     {
-        /*if (i == 100) {
-            ropeConnectionVel = vector3d(0.0, 0, 0);
+       /* if (i >= 500) // for the simulation of sinusoidal movement of first rope point
+        {
+        V = 1.0*sin(0.02*(i-500));
+        ropeConnectionVel = vector3d(V, 0, 0);
+        ropeSimulation->setRopeConnectionVel(ropeConnectionVel);
+        }
+        if(i >= 814)
+        {
+            ropeConnectionVel = vector3d(0, 0, 0);
             ropeSimulation->setRopeConnectionVel(ropeConnectionVel);
         }*/
        
         ropeSimulation->operate(dt);
 
         if (i == frame) {
-            ofstream fout(string("output_" + to_string(i) + ".dat").c_str());
+            //ofstream fout(string("output_" + to_string(i) + ".dat").c_str());
             for (int j = 0; j < numOfMasses; j++)
             {
                 vector3d pos = ropeSimulation->masses[j]->pos;  
                 vector3d vel = ropeSimulation->masses[j]->vel;              
-                //pos.disp();
-                fout << fixed << setprecision(6) << pos.x << "\t " << pos.y << endl;
+                pos.disp();
+                //fout << fixed << setprecision(6) << pos.x << "\t " << pos.y << endl;
             }
-            fout.close();
+            //fout.close();
             frame += 30;
         }
+
+        ropeSimulation->relaxation(numIt);
     }
 
     ropeSimulation->release();
